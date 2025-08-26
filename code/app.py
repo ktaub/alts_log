@@ -9,6 +9,20 @@ import openpyxl
 
 warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
 
+# --------- Configuration ---------
+DEBUG_OUTPUTS_ENABLED = False
+TRANSACTIONS_CACHE_FILE = 'transactions_cache.xlsx'
+
+def write_debug_excel(df, path):
+    """Write debug DataFrame to Excel if debug is enabled."""
+    try:
+        if DEBUG_OUTPUTS_ENABLED and df is not None:
+            df.to_excel(path, index=False)
+    except Exception:
+        pass
+
+# ---------------------------------
+
 def coerce_id_columns_to_int64(df):
     """Ensure ID columns are numeric (nullable Int64) for consistent joins."""
     for col in ['Direct Owner Entity ID', 'Entity ID']:
@@ -16,7 +30,7 @@ def coerce_id_columns_to_int64(df):
             df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
     return df
 
-def get_cached_transactions(cache_file='transactions_cache.xlsx'):
+def get_cached_transactions(cache_file=TRANSACTIONS_CACHE_FILE):
     """Load cached transactions and return DataFrame and last Trade Date."""
     if os.path.exists(cache_file):
         try:
@@ -38,13 +52,13 @@ def get_cached_transactions(cache_file='transactions_cache.xlsx'):
     else:
         return None, None
 
-def save_cached_transactions(df, cache_file='transactions_cache.xlsx'):
+def save_cached_transactions(df, cache_file=TRANSACTIONS_CACHE_FILE):
     """Save transactions DataFrame to cache file."""
     df.to_excel(cache_file, index=False)
 
 def fetch_and_process_addepar_data(api_key, api_secret, firm_id, base_url, start_date, end_date):
     """Fetch and process transaction data from Addepar, using cache if available."""
-    cache_file = 'transactions_cache.xlsx'
+    cache_file = TRANSACTIONS_CACHE_FILE
     cached_df, last_cached_date = get_cached_transactions(cache_file)
     today_dt = pd.to_datetime(end_date)
     
@@ -135,7 +149,7 @@ def fetch_and_process_addepar_data(api_key, api_secret, firm_id, base_url, start
     # Merge into the pivot table
     result = pivot.merge(last_buy_contrib, on=["Direct Owner Entity ID", "Entity ID"], how="left")
     result = result.merge(last_sell_dist, on=["Direct Owner Entity ID", "Entity ID"], how="left")
-    result.to_excel('result.xlsx', index=False)
+    write_debug_excel(result, 'result.xlsx')
 
     # Standardize ID columns for the result as well
     result = coerce_id_columns_to_int64(result)
@@ -182,9 +196,9 @@ def process_alts_info_data():
     # is_open == True means at least one incomplete row, so should go to 'open'
     
     # save dfs to excel
-    investment_status_df.to_excel('investment_status_df.xlsx', index=False)
-    subscription_dates.to_excel('subscription_dates.xlsx', index=False)
-    complete_summary.to_excel('complete_summary.xlsx', index=False)
+    write_debug_excel(investment_status_df, 'investment_status_df.xlsx')
+    write_debug_excel(subscription_dates, 'subscription_dates.xlsx')
+    write_debug_excel(complete_summary, 'complete_summary.xlsx')
     
     return investment_status_df, subscription_dates, complete_summary
 
@@ -286,7 +300,7 @@ def consolidate_alts_info_data(investment_status_df, transactions_df):
     build_positions(received_true, ['Direct Owner Entity ID', 'Entity ID'])
 
     consolidated_df = pd.DataFrame(consolidated_positions)
-    consolidated_df.to_excel('consolidated_df.xlsx', index=False)
+    write_debug_excel(consolidated_df, 'consolidated_df.xlsx')
     return consolidated_df
 
 def merge_and_calculate_final_metrics(consolidated_investment_df, addepar_result, subscription_dates):
@@ -309,7 +323,7 @@ def merge_and_calculate_final_metrics(consolidated_investment_df, addepar_result
     merged = merged.merge(subscription_dates, on=['Direct Owner Entity ID', 'Entity ID'], how='left')
 
     #SAVE
-    merged.to_excel('merged_test.xlsx', index=False)
+    write_debug_excel(merged, 'merged_test.xlsx')
     
     # Fill missing Addepar columns with 0
     addepar_columns = ['Buy', 'Contribution', 'Contribution (Recalled)', 'Distribution', 'Sell']
@@ -319,7 +333,7 @@ def merge_and_calculate_final_metrics(consolidated_investment_df, addepar_result
         else:
             merged[col] = merged[col].fillna(0)
 
-    merged["Contributed Capital"] = merged['Buy'] +merged["Contribution"] - merged["Contribution (Recalled)"]
+    merged["Contributed Capital"] = merged['Buy'] + merged["Contribution"] - merged["Contribution (Recalled)"]
 
     merged["Unfunded Capital"] = (
         merged["Original Commitment"]
@@ -334,16 +348,16 @@ def merge_and_calculate_final_metrics(consolidated_investment_df, addepar_result
         + merged["Distribution"]
     )
 
-    merged.to_excel('merged.xlsx', index=False)
+    write_debug_excel(merged, 'merged.xlsx')
 
     return merged
 
 def format_and_save_excel(merged_data, investment_status_df, output_filename):
     """Format dates and save the final Excel file with proper formatting."""
     # Select and reorder columns (removed Transaction Type since we now have one row per position)
-    final_df = merged_data[["Client","Direct Owner Entity ID", "Entity ID", "Account", "Instrument", "Instruction Date", "Last Trade Date", "Subscription Approval Date", "Original Commitment", "Contributed Capital", "Unfunded Capital", "Returned Capital", "Remaining to Sell", "Last Buy/Contribution", "Last Sell/Distribution", "Completed?", "is_open"]]
+    final_df = merged_data[["Client", "Account", "Instrument", "Instruction Date", "Last Trade Date", "Subscription Approval Date", "Original Commitment", "Contributed Capital", "Unfunded Capital", "Returned Capital", "Remaining to Sell", "Last Buy/Contribution", "Last Sell/Distribution", "Completed?", "is_open"]]
     
-    # Add Open Reason column after is_open is calculated
+    # Prepare Open Reason column (populated below for Open rows only)
     final_df['Open Reason'] = ''
 
     # Ensure Account column has empty string instead of NaN, 'nan', 'None', or None
@@ -375,9 +389,6 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
     # A position is considered "open" if it has unfunded capital OR if is_open is True
     final_df['is_open'] = (final_df['is_open'] != False) | (final_df['Unfunded Capital'] > 0)
     
-    # Create reason column for why position is open
-    final_df['Open Reason'] = ''
-    
     # Check for unfunded capital first
     final_df.loc[final_df['Unfunded Capital'] > 0, 'Open Reason'] = 'Unfunded Capital'
     
@@ -405,7 +416,12 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
             ]
             
             incomplete_sells = matching_rows[
-                (matching_rows['Transaction Type'].isin(['Sell', 'Liquidate'])) & 
+                (matching_rows['Transaction Type'].isin(['Sell'])) & 
+                (matching_rows['Completed?'].astype(str).str.lower() == 'false')
+            ]
+            
+            incomplete_liquidates = matching_rows[
+                (matching_rows['Transaction Type'].isin(['Liquidate'])) & 
                 (matching_rows['Completed?'].astype(str).str.lower() == 'false')
             ]
             
@@ -414,13 +430,15 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
                 final_df.loc[idx, 'Open Reason'] = 'Buy'
             elif not incomplete_sells.empty:
                 final_df.loc[idx, 'Open Reason'] = 'Sell'
+            elif not incomplete_liquidates.empty:
+                final_df.loc[idx, 'Open Reason'] = 'Liquidate'
 
     # Split into open and close sheets based on is_open
     open_df = final_df[final_df['is_open'] == True].copy()
     close_df = final_df[final_df['is_open'] == False].copy()
 
-    # Drop Completed? and is_open from output
-    cols_to_drop = [col for col in ['Completed?', 'is_open', 'Account'] if col in open_df.columns]
+    # Drop Completed? and is_open from output (keep Account in both sheets)
+    cols_to_drop = [col for col in ['Completed?', 'is_open'] if col in open_df.columns]
     open_df = open_df.drop(columns=cols_to_drop)
     close_df = close_df.drop(columns=cols_to_drop)
     
@@ -432,54 +450,59 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
     if 'Remaining to Sell' in close_df.columns:
         close_df = close_df.drop(columns=['Remaining to Sell'])
 
+    # Reorder columns in Open sheet: place Open Reason after Client, Account, Instrument
+    if 'Open Reason' in open_df.columns:
+        prefix = [col for col in ['Client', 'Account', 'Instrument', 'Open Reason'] if col in open_df.columns]
+        others = [c for c in open_df.columns if c not in prefix]
+        open_df = open_df[prefix + others]
+
+    def _format_sheet(writer, sheet_name, sheet_df):
+        worksheet = writer.sheets[sheet_name]
+        worksheet.sheet_view.zoomScale = 90
+        all_currency_cols = ["Original Commitment", "Contributed Capital", "Unfunded Capital", "Returned Capital", "Remaining to Sell"]
+        currency_cols = [col for col in all_currency_cols if col in sheet_df.columns]
+        # Format currency columns
+        for col_idx, col in enumerate(sheet_df.columns, 1):
+            if col in currency_cols:
+                for cell in worksheet[chr(64+col_idx)][1:]:  # skip header
+                    cell.number_format = '"$"#,##0'
+        # Set column widths based on formatted values
+        for col_idx, col in enumerate(sheet_df.columns, 1):
+            if col in currency_cols:
+                sheet_df[col] = sheet_df[col].fillna(0)
+                max_length = max(
+                    len("${:,.0f}".format(cell.value if cell.value is not None and cell.value != '' else 0))
+                    for cell in worksheet[chr(64+col_idx)][1:]
+                )
+                max_length = max(max_length, len(str(col)))
+            else:
+                max_length = max(
+                    len(str(worksheet.cell(row=row, column=col_idx).value))
+                    for row in range(1, worksheet.max_row + 1)
+                )
+            worksheet.column_dimensions[chr(64+col_idx)].width = max_length + 2
+        # Conditional formatting for Open sheet
+        if sheet_name == "Open" and 'Open Reason' in sheet_df.columns:
+            open_reason_col_idx = list(sheet_df.columns).index('Open Reason') + 1
+            open_reason_col_letter = chr(64 + open_reason_col_idx)
+            for row in range(2, worksheet.max_row + 1):
+                cell = worksheet[f"{open_reason_col_letter}{row}"]
+                reason = cell.value
+                if reason == 'Unfunded Capital':
+                    cell.fill = openpyxl.styles.PatternFill(start_color='FFE6CC', end_color='FFE6CC', fill_type='solid')
+                elif reason == 'Buy':
+                    cell.fill = openpyxl.styles.PatternFill(start_color='E6FFE6', end_color='E6FFE6', fill_type='solid')
+                elif reason == 'Sell' or reason == 'Liquidate':
+                    cell.fill = openpyxl.styles.PatternFill(start_color='FFE6E6', end_color='FFE6E6', fill_type='solid')
+                elif reason == 'Pending Transaction':
+                    cell.fill = openpyxl.styles.PatternFill(start_color='F0F0F0', end_color='F0F0F0', fill_type='solid')
+
     # Save to Excel with adjusted column widths and currency formatting
     with pd.ExcelWriter(f"{output_filename}", engine="openpyxl") as writer:
         open_df.to_excel(writer, index=False, sheet_name="Open")
         close_df.to_excel(writer, index=False, sheet_name="Closed")
-        for sheet_name, sheet_df in zip(["Open", "Closed"], [open_df, close_df]):
-            worksheet = writer.sheets[sheet_name]
-            worksheet.sheet_view.zoomScale = 90  # Set zoom to 90%
-            # Define currency columns based on what's available in each sheet
-            all_currency_cols = ["Original Commitment", "Contributed Capital", "Unfunded Capital", "Returned Capital", "Remaining to Sell"]
-            currency_cols = [col for col in all_currency_cols if col in sheet_df.columns]
-            # Format currency columns
-            for col_idx, col in enumerate(sheet_df.columns, 1):
-                if col in currency_cols:
-                    for cell in worksheet[chr(64+col_idx)][1:]:  # skip header
-                        cell.number_format = '"$"#,##0'
-            # Set column widths based on formatted values
-            for col_idx, col in enumerate(sheet_df.columns, 1):
-                if col in currency_cols:
-                    sheet_df[col] = sheet_df[col].fillna(0)
-                    max_length = max(
-                        len("${:,.0f}".format(cell.value if cell.value is not None and cell.value != '' else 0))
-                        for cell in worksheet[chr(64+col_idx)][1:]
-                    )
-                    max_length = max(max_length, len(str(col)))
-                else:
-                    max_length = max(
-                        len(str(worksheet.cell(row=row, column=col_idx).value))
-                        for row in range(1, worksheet.max_row + 1)
-                    )
-                worksheet.column_dimensions[chr(64+col_idx)].width = max_length + 2
-            
-            # Add conditional formatting for Open Reason column (only in Open sheet)
-            if sheet_name == "Open" and 'Open Reason' in sheet_df.columns:
-                open_reason_col_idx = list(sheet_df.columns).index('Open Reason') + 1
-                open_reason_col_letter = chr(64 + open_reason_col_idx)
-                
-                # Apply conditional formatting based on reason
-                for row in range(2, worksheet.max_row + 1):  # Skip header
-                    cell = worksheet[f"{open_reason_col_letter}{row}"]
-                    reason = cell.value
-                    if reason == 'Unfunded Capital':
-                        cell.fill = openpyxl.styles.PatternFill(start_color='FFE6CC', end_color='FFE6CC', fill_type='solid')  # Light orange
-                    elif reason == 'Buy':
-                        cell.fill = openpyxl.styles.PatternFill(start_color='E6FFE6', end_color='E6FFE6', fill_type='solid')  # Light green
-                    elif reason == 'Sell':
-                        cell.fill = openpyxl.styles.PatternFill(start_color='FFE6E6', end_color='FFE6E6', fill_type='solid')  # Light red
-                    elif reason == 'Pending Transaction':
-                        cell.fill = openpyxl.styles.PatternFill(start_color='F0F0F0', end_color='F0F0F0', fill_type='solid')  # Light gray
+        _format_sheet(writer, "Open", open_df)
+        _format_sheet(writer, "Closed", close_df)
     
     os.startfile(f"{output_filename}")
 
