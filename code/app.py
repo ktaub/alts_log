@@ -178,10 +178,23 @@ def process_alts_info_data():
         investment_status_df['Received in Addepar'] = investment_status_df['Received in Addepar'].astype(str).str.strip()
     else:
         investment_status_df['Received in Addepar'] = ''
-    investment_status_df = investment_status_df.dropna(subset=['Direct Owner Entity ID', 'Entity ID'])
+    # Keep rows without IDs to allow pending Buys (not yet in Addepar) to appear
+
+    # Create a normalized instrument column for matching (use Investment when not yet in Addepar)
+    instrument_match = investment_status_df['Instrument']
+    mask_not_in_addepar = investment_status_df['Received in Addepar'].str.lower() == 'false'
+    if 'Investment' in investment_status_df.columns:
+        instrument_match = instrument_match.mask(mask_not_in_addepar, investment_status_df['Investment'])
+    investment_status_df['Instrument_Match'] = instrument_match.astype(str).str.strip()
     
     # Convert Documentation Approval Date to datetime for calculations
     investment_status_df['Documentation Approval Date'] = pd.to_datetime(investment_status_df['Documentation Approval Date'], errors='coerce')
+    
+    # Normalize transaction type for robust matching
+    if 'Transaction Type' in investment_status_df.columns:
+        investment_status_df['Txn_Type'] = investment_status_df['Transaction Type'].astype(str).str.strip().str.lower()
+    else:
+        investment_status_df['Txn_Type'] = ''
     
     # Create Subscription Approval Date from Buy transactions
     buy_transactions = investment_status_df[investment_status_df['Transaction Type'] == 'Buy'].copy()
@@ -210,6 +223,9 @@ def consolidate_alts_info_data(investment_status_df, transactions_df):
     # Split DataFrame
     received_false = investment_status_df[investment_status_df['Received in Addepar'].str.lower() == 'false'].copy()
     received_true = investment_status_df[investment_status_df['Received in Addepar'].str.lower() != 'false'].copy()
+
+    # For items not yet in Addepar, they may lack IDs. Keep these for Open tab if Buy incomplete.
+    # Already handled by keeping rows without IDs in process_alts_info_data.
 
     # Use Investment as Instrument for the 'false' group
     if not received_false.empty:
@@ -272,9 +288,16 @@ def consolidate_alts_info_data(investment_status_df, transactions_df):
                 row['Documentation Approval Date'] = latest_buy.get('Documentation Approval Date')
                 row['Last Trade Date'] = latest_buy.get('Last Trade Date')
 
-            # Sells (Remaining to Sell)
+            # Sells and Liquidates (Remaining to Sell and Instruction Date)
             sell = grp[grp['Transaction Type'].isin(['Sell', 'Liquidate'])]
             total_remaining_to_sell = 0
+            # If no Instruction Date from Buy, get it from the latest Sell/Liquidate
+            if pd.isna(row['Instruction Date']) and not sell.empty:
+                sell = sell.sort_values('Documentation Approval Date', ascending=False)
+                latest_sell = sell.iloc[0]
+                row['Instruction Date'] = latest_sell.get('Instruction Date')
+                if pd.isna(row['Last Trade Date']):
+                    row['Last Trade Date'] = latest_sell.get('Last Trade Date')
             if not sell.empty and 'Sell Amount' in investment_status_df.columns:
                 for _, s in sell.iterrows():
                     original_sell_amount = s.get('Sell Amount', 0)
@@ -363,11 +386,25 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
     # Ensure Account column has empty string instead of NaN, 'nan', 'None', or None
     final_df['Account'] = final_df['Account'].astype(str).replace(['nan', 'None'], '').replace({pd.NA: '', None: ''}).fillna('').str.strip()
 
-    # Sort by Instruction Date (most recent last)
+    # Sort by Instruction Date (most recent last) and compute last dates per Account+Instrument
     final_df['Instruction Date'] = pd.to_datetime(final_df['Instruction Date'], errors='coerce')
-    final_df = final_df.sort_values('Instruction Date', ascending=True, na_position='first')
+    final_df['Last Trade Date'] = pd.to_datetime(final_df['Last Trade Date'], errors='coerce')
+    # Compute last dates for each position
+    final_df['Last Instruction Date'] = final_df.groupby(['Account', 'Instrument'])['Instruction Date'].transform('max')
+    final_df['Last Trade Date'] = final_df.groupby(['Account', 'Instrument'])['Last Trade Date'].transform('max')
+    # Replace 'Instruction Date' column with 'Last Instruction Date' at the same position in the output
+    cols_order = list(final_df.columns)
+    if 'Instruction Date' in cols_order and 'Last Instruction Date' in cols_order:
+        insert_idx = cols_order.index('Instruction Date')
+        # Remove any existing occurrence to avoid duplicates
+        cols_order = [c for c in cols_order if c not in ['Instruction Date', 'Last Instruction Date']]
+        cols_order.insert(insert_idx, 'Last Instruction Date')
+        final_df = final_df[cols_order]
+    # Sort by the computed Last Instruction Date
+    sort_col = 'Last Instruction Date' if 'Last Instruction Date' in final_df.columns else 'Instruction Date'
+    final_df = final_df.sort_values(sort_col, ascending=True, na_position='first')
 
-    date_columns = ["Instruction Date", "Last Trade Date", "Subscription Approval Date", "Last Buy/Contribution", "Last Sell/Distribution"]
+    date_columns = ["Instruction Date", "Last Instruction Date", "Last Trade Date", "Subscription Approval Date", "Last Buy/Contribution", "Last Sell/Distribution"]
     for col in date_columns:
         if col in final_df.columns:
             final_df[col] = pd.to_datetime(final_df[col], errors='coerce').dt.strftime('%m/%d/%Y')
@@ -389,39 +426,36 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
     # A position is considered "open" if it has unfunded capital OR if is_open is True
     final_df['is_open'] = (final_df['is_open'] != False) | (final_df['Unfunded Capital'] > 0)
     
-    # Check for unfunded capital first
-    final_df.loc[final_df['Unfunded Capital'] > 0, 'Open Reason'] = 'Unfunded Capital'
-    
-    # Check for incomplete transactions in investment_status_df
+    # Check for incomplete transactions in investment_status_df first (higher priority than Unfunded Capital)
     for idx, row in final_df.iterrows():
         if row['is_open'] != False:
             # Find matching rows in investment_status_df
             if row['Account'] and row['Instrument']:
-                # For positions with Account and Instrument
+                # For positions with Account and Instrument, compare using Instrument_Match for consistency
                 matching_rows = investment_status_df[
-                    (investment_status_df['Account'].astype(str).str.strip() == str(row['Account']).strip()) &
-                    (investment_status_df['Instrument'].astype(str).str.strip() == str(row['Instrument']).strip())
+                    (investment_status_df['Account'].astype(str).str.strip().str.lower() == str(row['Account']).strip().lower()) &
+                    (investment_status_df['Instrument_Match'].astype(str).str.strip().str.lower() == str(row['Instrument']).strip().lower())
                 ]
             else:
-                # For positions without Account, use Client and Instrument
+                # For positions without Account or without Addepar IDs, use Client and Instrument
                 matching_rows = investment_status_df[
-                    (investment_status_df['Client'].astype(str).str.strip() == str(row['Client']).strip()) &
-                    (investment_status_df['Instrument'].astype(str).str.strip() == str(row['Instrument']).strip())
+                    (investment_status_df['Client'].astype(str).str.strip().str.lower() == str(row['Client']).strip().lower()) &
+                    (investment_status_df['Instrument_Match'].astype(str).str.strip().str.lower() == str(row['Instrument']).strip().lower())
                 ]
             
-            # Check for incomplete transactions
+            # Check for incomplete transactions (normalized types)
             incomplete_buys = matching_rows[
-                (matching_rows['Transaction Type'] == 'Buy') & 
+                (matching_rows['Txn_Type'] == 'buy') & 
                 (matching_rows['Completed?'].astype(str).str.lower() == 'false')
             ]
             
             incomplete_sells = matching_rows[
-                (matching_rows['Transaction Type'].isin(['Sell'])) & 
+                (matching_rows['Txn_Type'].isin(['sell'])) & 
                 (matching_rows['Completed?'].astype(str).str.lower() == 'false')
             ]
             
             incomplete_liquidates = matching_rows[
-                (matching_rows['Transaction Type'].isin(['Liquidate'])) & 
+                (matching_rows['Txn_Type'].isin(['liquidate'])) & 
                 (matching_rows['Completed?'].astype(str).str.lower() == 'false')
             ]
             
@@ -432,6 +466,9 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
                 final_df.loc[idx, 'Open Reason'] = 'Sell'
             elif not incomplete_liquidates.empty:
                 final_df.loc[idx, 'Open Reason'] = 'Liquidate'
+
+    # If still empty, then mark as Unfunded Capital
+    final_df.loc[(final_df['Open Reason'] == '') & (final_df['Unfunded Capital'] > 0), 'Open Reason'] = 'Unfunded Capital'
 
     # Split into open and close sheets based on is_open
     open_df = final_df[final_df['is_open'] == True].copy()
