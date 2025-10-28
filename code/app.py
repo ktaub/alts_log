@@ -23,10 +23,12 @@ TRANSACTIONS_CACHE_FILE = 'transactions_cache.xlsx'
 
 
 def coerce_id_columns_to_int64(df):
-    """Ensure ID columns are numeric (nullable Int64) for consistent joins."""
+    """Ensure ID columns are numeric for consistent joins."""
     for col in ['Direct Owner Entity ID', 'Entity ID']:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+            # Use float64 for better compatibility across pandas versions
+            # NaN values are preserved, which is what we need for outer joins
+            df[col] = pd.to_numeric(df[col], errors='coerce').astype('float64')
     return df
 
 
@@ -164,6 +166,10 @@ def fetch_and_process_alts_list_data(api_key, api_secret, firm_id, base_url, sta
     alts_list_df, success, message = fetch_addepar_data(
         "portfolio", "734752", api_key, api_secret, firm_id, base_url, fetch_start_date, end_date
     )
+    
+    if not success or alts_list_df is None:
+        print(f"Failed to fetch alts list data: {message}")
+        return None
 
     # remove last row
     alts_list_df = alts_list_df.iloc[:-1]
@@ -725,7 +731,9 @@ def main():
     alts_list_df = fetch_and_process_alts_list_data(
         api_key, api_secret, firm_id, base_url, start_date, end_date
     )
-    if transactions_df is None:
+    if transactions_df is None or alts_list_df is None:
+        print("Failed to fetch required data. Please check your API connection and credentials.")
+        input("\nPress Enter to exit...")
         return
 
     investment_status_df, subscription_dates, complete_summary = process_alts_info_data()

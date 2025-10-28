@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "C:\Users\Karen Taub\Activest WM\AWM - Tecnologia\Operations\alts_log_beta\code\app.py", line 744, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\Karen Taub\Activest WM\AWM - Tecnologia\Operations\alts_log_beta\code\app.py", line 725, in main
+    alts_list_df = fetch_and_process_alts_list_data(
+        api_key, api_secret, firm_id, base_url, start_date, end_date
+    )
+  File "C:\Users\Karen Taub\Activest WM\AWM - Tecnologia\Operations\alts_log_beta\code\app.py", line 169, in fetch_and_process_alts_list_data
+    alts_list_df = alts_list_df.iloc[:-1]
+                   ^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'iloc'
