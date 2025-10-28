@@ -1,6 +1,9 @@
 import re
 import pandas as pd
 import os
+import sys
+# Add the code directory to the Python path to ensure imports work
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from addepar_utils import fetch_addepar_data, set_up_environment
 import warnings
 import glob
