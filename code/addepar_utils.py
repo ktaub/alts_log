@@ -57,8 +57,13 @@ def fetch_addepar_data(view_type: str, view_id: str, api_key: str, api_secret: s
         if response.status_code == 200:
             # Use BytesIO to read the XLSX data from the response content
             xlsx_data = BytesIO(response.content)
-            data = pd.read_excel(xlsx_data)
-            return data, True, "Data fetched successfully"
+            try:
+                data = pd.read_excel(xlsx_data, engine="openpyxl")
+                if data.empty:
+                    return None, False, "No data returned from Addepar API"
+                return data, True, "Data fetched successfully"
+            except Exception as e:
+                return None, False, f"Failed to parse Excel response: {str(e)}"
         else:
             error_detail = response.text if response.text else "No error details available"
             return None, False, f"Failed to fetch data: {response.status_code}\nDetails: {error_detail}"
