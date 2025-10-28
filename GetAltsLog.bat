@@ -37,7 +37,7 @@ if errorlevel 1 (
 
 REM Run the application
 echo Running Alts Log application...
-python code\app.py
+python code\app.py > output.log 2>&1
 
 REM Deactivate virtual environment
 deactivate

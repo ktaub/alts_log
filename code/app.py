@@ -10,7 +10,14 @@ import glob
 from datetime import datetime
 import openpyxl
 
-warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
+# Suppress warnings - compatible with pandas 1.x and 2.x
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+try:
+    warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
+except AttributeError:
+    # SettingWithCopyWarning doesn't exist in pandas 2.0+
+    pass
 
 TRANSACTIONS_CACHE_FILE = 'transactions_cache.xlsx'
 
@@ -151,7 +158,7 @@ def fetch_and_process_alts_list_data(api_key, api_secret, firm_id, base_url, sta
     """Fetch and process transaction data from Addepar, using cache if available."""
     cached_df, _ = get_cached_transactions(TRANSACTIONS_CACHE_FILE)
     today_dt = pd.to_datetime(end_date)
-    fetch_start_date = (today_dt - pd.Timedelta(days=60)).strftime('%Y-%m-%d')
+    fetch_start_date = (today_dt - pd.Timedelta(days=15)).strftime('%Y-%m-%d')
 
     # Only fetch if fetch_start_date <= end_date
     alts_list_df, success, message = fetch_addepar_data(
