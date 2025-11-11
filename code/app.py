@@ -52,33 +52,48 @@ def save_cached_transactions(df, cache_file=TRANSACTIONS_CACHE_FILE):
 
 def fetch_and_process_addepar_data(api_key, api_secret, firm_id, base_url, start_date, end_date):
     """Fetch and process transaction data from Addepar, using cache if available."""
+    print("\n[STEP 1/7] Loading cached transaction data...")
     cached_df, _ = get_cached_transactions(TRANSACTIONS_CACHE_FILE)
+    if cached_df is not None:
+        print(f"  [OK] Loaded {len(cached_df)} cached transactions")
+    else:
+        print("  [INFO] No cache found")
+    
     today_dt = pd.to_datetime(end_date)
-    fetch_start_date = (today_dt - pd.Timedelta(days=60)).strftime('%Y-%m-%d')
+    fetch_start_date = (today_dt - pd.Timedelta(days=5)).strftime('%Y-%m-%d')
 
+    print(f"[STEP 1/7] Fetching new transactions from Addepar (from {fetch_start_date} to {end_date})...")
     # Only fetch if fetch_start_date <= end_date
     transactions_df, success, message = fetch_addepar_data(
         "transactions", "105390", api_key, api_secret, firm_id, base_url, fetch_start_date, end_date
     )
+
     if not success:
-        print(message)
+        print(f"  [ERROR] Failed to fetch transactions: {message}")
         # If cache exists, use cached data only
         if cached_df is not None:
+            print("  [INFO] Using cached data only")
             transactions_df = cached_df
         else:
             return None, None
     else:
+        print(f"  [OK] Fetched {len(transactions_df)} new transactions")
         # Combine cached and new data
         if cached_df is not None:
+            print("[STEP 1/7] Combining cached and new transactions...")
             combined_df = pd.concat(
                 [cached_df, transactions_df], ignore_index=True)
             combined_df = combined_df.sort_values(
                 'Posted Date').drop_duplicates('ID', keep='last')
             transactions_df = combined_df
+            print(f"  [OK] Combined total: {len(transactions_df)} transactions")
         # Save updated cache
+        print("[STEP 1/7] Saving updated cache...")
         save_cached_transactions(transactions_df, TRANSACTIONS_CACHE_FILE)
+        print("  [OK] Cache saved")
 
     # Standardize ID columns as numeric for joins
+    print("[STEP 1/7] Processing transaction data...")
     transactions_df = coerce_id_columns_to_int64(transactions_df)
 
     # Only include Distributions where Return of Capital is not zero
@@ -150,17 +165,16 @@ def fetch_and_process_addepar_data(api_key, api_secret, firm_id, base_url, start
                           "Direct Owner Entity ID", "Entity ID"], how="left")
     # Standardize ID columns for the result as well
     result = coerce_id_columns_to_int64(result)
+    print(f"  [OK] Transaction processing complete - {len(result)} positions\n")
 
-    # save result to excel
-    result.to_excel("result.xlsx", index=False)
     return transactions_df, result
 
 
 def fetch_and_process_alts_list_data(api_key, api_secret, firm_id, base_url, start_date, end_date):
     """Fetch and process transaction data from Addepar, using cache if available."""
-    cached_df, _ = get_cached_transactions(TRANSACTIONS_CACHE_FILE)
+    print("[STEP 2/7] Fetching alts list data from Addepar...")
     today_dt = pd.to_datetime(end_date)
-    fetch_start_date = (today_dt - pd.Timedelta(days=15)).strftime('%Y-%m-%d')
+    fetch_start_date = (today_dt - pd.Timedelta(days=7)).strftime('%Y-%m-%d')
 
     # Only fetch if fetch_start_date <= end_date
     alts_list_df, success, message = fetch_addepar_data(
@@ -168,25 +182,41 @@ def fetch_and_process_alts_list_data(api_key, api_secret, firm_id, base_url, sta
     )
     
     if not success or alts_list_df is None:
-        print(f"Failed to fetch alts list data: {message}")
+        print(f"  [ERROR] Failed to fetch alts list data: {message}")
         return None
+    
+    print(f"  [OK] Fetched {len(alts_list_df)} alts list records")
 
     # remove last row
     alts_list_df = alts_list_df.iloc[:-1]
-    # save alts_list_df to excel
-    alts_list_df.to_excel("alts_list_df.xlsx", index=False)
 
     # rename Direct Owner ID to Direct Owner Entity ID
     alts_list_df = alts_list_df.rename(columns={"Direct Owner ID": "Direct Owner Entity ID", "Capital Returned (Since Inception, USD)": "Capital Returned",
                                                 "Total Commitments (Since Inception, USD)": "Total Commitments", "Total Contributions (Since Inception, USD)": "Total Contributions"})
+    print(f"  [OK] Alts list processing complete\n")
     return alts_list_df
 
 
 def process_alts_info_data():
     """Load and process the Alts Info Excel file."""
+    print("[STEP 3/7] Loading and processing Alts Info Excel file...")
     # Read both sheets from Alts Info file
     alternatives_df = pd.read_excel(
         "Alts Info.xlsx", sheet_name="Alternatives", engine="openpyxl")
+    
+    historical_df = pd.read_excel(
+        "Alts Info.xlsx", sheet_name="Historical", engine="openpyxl")
+    print(f"  [OK] Loaded {len(historical_df)} historical records")
+
+    # add rows from historical_df to alternatives_df
+    alternatives_df = pd.concat([alternatives_df, historical_df])
+    print(f"  [OK] Added {len(historical_df)} historical records to alternatives_df")
+
+    # Remove empty rows immediately to improve performance
+    print(f"  - Original rows: {len(alternatives_df)}")
+    # Drop rows where all values are NaN or where key columns are empty
+    alternatives_df = alternatives_df.dropna(how='all')
+    print(f"  - After removing empty rows: {len(alternatives_df)}")
 
     # Combine the sheets
     investment_status_df = alternatives_df
@@ -283,9 +313,10 @@ def process_alts_info_data():
         complete_summary = complete_summary.drop(columns=['count'])
     # Ensure IDs remain numeric for downstream joins
     complete_summary = coerce_id_columns_to_int64(complete_summary)
+    
+    print(f"  [OK] Processed {len(investment_status_df)} investment records")
+    print(f"  [OK] Found {len(subscription_dates)} subscription dates\n")
 
-    # save investment_status_df to excel
-    investment_status_df.to_excel("investment_status_df.xlsx", index=False)
 
     return investment_status_df, subscription_dates, complete_summary
 
@@ -353,6 +384,13 @@ def consolidate_alts_info_data(investment_status_df, transactions_df):
                     0] if not legal_entity_series.empty else owner_value
             else:
                 legal_entity_value = owner_value
+            
+            # Get Advisor value
+            advisor_value = ''
+            if 'Advisor' in grp.columns:
+                advisor_series = grp['Advisor'].astype(
+                    str).str.strip().replace('', pd.NA).dropna()
+                advisor_value = advisor_series.iloc[0] if not advisor_series.empty else ''
 
             row = {
                 'Direct Owner Entity ID': direct_owner_entity_id,
@@ -360,6 +398,7 @@ def consolidate_alts_info_data(investment_status_df, transactions_df):
                 'Account': account,
                 'Top Level Owner': owner_value,
                 'Legal Entity': legal_entity_value,
+                'Advisor': advisor_value,
                 'Instrument': instrument,
                 'Original Commitment': 0,
                 'Instruction Date': None,
@@ -397,6 +436,7 @@ def consolidate_alts_info_data(investment_status_df, transactions_df):
 
 def merge_and_calculate_final_metrics(consolidated_investment_df, addepar_result, subscription_dates):
     """Merge data sources and calculate final financial metrics."""
+    print("[STEP 5/7] Merging data sources and calculating metrics...")
 
     # Ensure Direct Owner Entity ID and Entity ID are numeric for consistent joins
     consolidated_investment_df = coerce_id_columns_to_int64(
@@ -456,15 +496,55 @@ def merge_and_calculate_final_metrics(consolidated_investment_df, addepar_result
         # If subscription_dates is empty, add empty column
         merged['Subscription Approval Date'] = pd.NA
 
+
+    # import CA,TI sheet from Alts Info.xlsx
+    ca_ti_df = pd.read_excel(
+        "Alts Info.xlsx", sheet_name="CA,TI", engine="openpyxl")
+    print(f"  [OK] Loaded {len(ca_ti_df)} CA,TI records")
+
+    # for each row in merged, add to 'Total Contributions' the "Capital Calls prior to Transfer In" column value for the corresponding Direct Owner Entity ID and Entity ID
+    # Efficiently add 'Capital Calls prior to Transfer In' and 'Capital Returned prior to Transfer IN'
+    # to merged, acknowledging that not all items in merged will be in ca_ti_df.
+
+    # Prepare ca_ti_df with IDs as keys for a left merge
+    ca_ti_cols = [
+        'Direct Owner Entity ID',
+        'Entity ID',
+        'Capital Calls prior to Transfer In',
+        'Capital Returned prior to Transfer IN',
+    ]
+    ca_ti_short = ca_ti_df[ca_ti_cols].copy()
+
+    # Merge CA,TI columns in as new columns (will be NaN if no match)
+    merged = merged.merge(
+        ca_ti_short,
+        on=['Direct Owner Entity ID', 'Entity ID'],
+        how='left',
+        suffixes=('', '_ca_ti')
+    )
+    # Fill NaN with 0 for additive logic
+    merged['Capital Calls prior to Transfer In'] = merged['Capital Calls prior to Transfer In'].fillna(0)
+    merged['Capital Returned prior to Transfer IN'] = merged['Capital Returned prior to Transfer IN'].fillna(0)
+
+    # Do the addition, preserving original NA if present (should be numeric, but robust to non-numeric)
+    merged['Total Contributions'] = merged['Total Contributions'].fillna(0) + merged['Capital Calls prior to Transfer In']
+    merged['Capital Returned'] = merged['Capital Returned'].fillna(0) + merged['Capital Returned prior to Transfer IN']
+
+    # Remove the helper columns
+    merged = merged.drop(columns=['Capital Calls prior to Transfer In', 'Capital Returned prior to Transfer IN'])
+
     # Calculate unfunded capital
     merged['Unfunded Capital'] = merged['Original Commitment'] - \
         merged['Total Contributions'] + merged['Capital Returned']
+    
+    print(f"  [OK] Merge complete - {len(merged)} total records\n")
 
     return merged
 
 
 def format_and_save_excel(merged_data, investment_status_df, output_filename):
     """Format dates and save the final Excel file with proper formatting."""
+    print("[STEP 6/7] Formatting data for Excel output...")
 
     # For positions without IDs (not in Addepar), use Investment as Instrument if Instrument is NaN
     no_ids_mask = merged_data['Direct Owner Entity ID'].isna(
@@ -493,8 +573,12 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
             merged_data['Legal Entity'] = merged_data['Top Level Owner']
         else:
             merged_data['Legal Entity'] = merged_data['Top Level Owner']
+    
+    # Ensure Advisor column exists - create it as empty if it doesn't exist
+    if 'Advisor' not in merged_data.columns:
+        merged_data['Advisor'] = ''
 
-    base_cols = ["Top Level Owner", "Legal Entity", "Account", "Instrument",  "Has all transactions", "Instruction Date", "Last Trade Date", "Subscription Approval Date", "Original Commitment",
+    base_cols = ["Top Level Owner", "Legal Entity", "Advisor", "Account", "Instrument",  "Has all transactions", "Instruction Date", "Last Trade Date", "Subscription Approval Date", "Original Commitment",
                  'Total Contributions',
                  'Unfunded Capital',
                  'Capital Returned', 'Mkt Value (USD)', "Last Buy/Contribution", "Last Sell/Distribution", "is_open"]
@@ -576,6 +660,7 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
 
     # Convert Unfunded Capital to numeric for comparison
 
+    print("[STEP 6/7] Calculating open reasons for positions...")
     # Check for incomplete transactions in investment_status_df first (higher priority than Unfunded Capital)
     for idx, row in final_df.iterrows():
         if row['is_open'] != False:
@@ -597,6 +682,7 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
             # Determine Open Reason per new rules
             # - if not "Initial Funding Received": in buy process
             # - if "Initial Funding Received" and not "Fully Funded?": unfunded capital
+
             reason_set = False
             not_initial_received = matching_rows['Initial Trade Executed'].astype(
                 str).str.strip().str.lower() == 'false'
@@ -618,12 +704,16 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
                         final_df.loc[idx, 'Open Reason'] = 'Unfunded Capital'
 
     # Split into open and close sheets based on is_open
+    print("[STEP 6/7] Splitting into Open and Closed sheets...")
     open_df = final_df[final_df['is_open'] == True].copy()
     open_df = open_df.sort_values(['Top Level Owner', 'Account', 'Instrument'])
 
     close_df = final_df[final_df['is_open'] == False].copy()
     close_df = close_df.sort_values(
         ['Top Level Owner', 'Account', 'Instrument'])
+    
+    print(f"  [OK] Open positions: {len(open_df)}")
+    print(f"  [OK] Closed positions: {len(close_df)}")
 
     # Drop funding-status column and is_open from output (keep Account in both sheets)
     cols_to_drop = [col for col in ['Completed?',
@@ -637,8 +727,8 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
 
     # Ensure column naming is Top Level Owner in both sheets and reorder Open
 
-    # Reorder columns in Open sheet: place Open Reason after Top Level Owner, Legal Entity, Account, Instrument
-    prefix = [col for col in ['Top Level Owner', 'Legal Entity', 'Account',
+    # Reorder columns in Open sheet: place Open Reason after Top Level Owner, Legal Entity, Advisor, Account, Instrument
+    prefix = [col for col in ['Top Level Owner', 'Legal Entity', 'Advisor', 'Account',
                               'Instrument', 'Open Reason'] if col in open_df.columns]
     others = [c for c in open_df.columns if c not in prefix]
     open_df = open_df[prefix + others]
@@ -703,28 +793,48 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
         # Freeze first row (header) and first column
         worksheet.freeze_panes = 'B2'
 
+    print("\n[STEP 7/7] Saving Excel file...")
     # Save to Excel with adjusted column widths and currency formatting
     with pd.ExcelWriter(f"{output_filename}", engine="openpyxl") as writer:
+        print(f"  - Writing Open sheet ({len(open_df)} rows)...")
         open_df.to_excel(writer, index=False, sheet_name="Open")
+        print(f"  - Writing Closed sheet ({len(close_df)} rows)...")
         close_df.to_excel(writer, index=False, sheet_name="Closed")
+        print("  - Formatting Open sheet...")
         _format_sheet(writer, "Open", open_df)
+        print("  - Formatting Closed sheet...")
         _format_sheet(writer, "Closed", close_df)
-
+    
+    print(f"  [OK] File saved: {output_filename}\n")
+    print("=" * 50)
+    print("[SUCCESS] Process completed successfully!")
+    print("=" * 50)
     os.startfile(f"{output_filename}")
 
 
 def main():
     """Main application function."""
+    print("\n" + "=" * 50)
+    print("ALTS LOG GENERATION PROCESS")
+    print("=" * 50 + "\n")
+    
     # Determine today's date for filename
     output_filename = f'Alts Log {datetime.now().strftime("%m-%d-%Y")}.xlsx'
 
     # If today's log already exists, open and exit
     if os.path.exists(output_filename):
+        print(f"[OK] Today's log already exists: {output_filename}")
+        print("  Opening existing file...\n")
         os.startfile(output_filename)
         exit()
 
+    print("Starting new log generation process...\n")
+    
     # Set up environment and API credentials
+    print("[SETUP] Configuring environment and API credentials...")
     api_key, api_secret, firm_id, base_url, start_date, end_date = set_up_environment()
+    print(f"  [OK] Environment configured (Period: {start_date} to {end_date})\n")
+    
     transactions_df, addepar_result = fetch_and_process_addepar_data(
         api_key, api_secret, firm_id, base_url, start_date, end_date
     )
@@ -732,14 +842,17 @@ def main():
         api_key, api_secret, firm_id, base_url, start_date, end_date
     )
     if transactions_df is None or alts_list_df is None:
-        print("Failed to fetch required data. Please check your API connection and credentials.")
+        print("\n[ERROR] Failed to fetch required data. Please check your API connection and credentials.")
         input("\nPress Enter to exit...")
         return
 
     investment_status_df, subscription_dates, complete_summary = process_alts_info_data()
+    
+    print("[STEP 4/7] Merging alts list with investment status...")
     # merge alts_list_df and investment_status_df on Direct Owner Entity ID and Entity ID
     consolidated_investment_df = investment_status_df.merge(
         alts_list_df, on=["Direct Owner Entity ID", "Entity ID"], how="left")
+    print(f"  [OK] Merged {len(consolidated_investment_df)} records\n")
 
     merged_data = merge_and_calculate_final_metrics(
         consolidated_investment_df, addepar_result, subscription_dates)

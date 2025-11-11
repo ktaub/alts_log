@@ -4,3 +4,4 @@ __init__.py
 .vscode
 *.env
 venv/
+output.log

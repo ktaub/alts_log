@@ -42,4 +42,4 @@ python code\app.py > output.log 2>&1
 REM Deactivate virtual environment
 deactivate
 
-pause 
+exit /b 0
