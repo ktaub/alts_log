@@ -370,6 +370,13 @@ def consolidate_alts_info_data(investment_status_df, transactions_df):
             owner_series = grp['Top Level Owner'].astype(str).str.strip().replace(
                 '', pd.NA).dropna() if 'Top Level Owner' in grp.columns else pd.Series([], dtype=str)
             owner_value = owner_series.iloc[0] if not owner_series.empty else ''
+            
+            # Get Top Level Owner ID value
+            owner_id_value = ''
+            if 'Top Level Owner ID' in grp.columns:
+                owner_id_series = grp['Top Level Owner ID'].astype(
+                    str).str.strip().replace('', pd.NA).dropna()
+                owner_id_value = owner_id_series.iloc[0] if not owner_id_series.empty else ''
 
             complete_val = None
             if 'Completed?' in grp.columns and not grp['Completed?'].isnull().all():
@@ -397,6 +404,7 @@ def consolidate_alts_info_data(investment_status_df, transactions_df):
                 'Entity ID': entity_id,
                 'Account': account,
                 'Top Level Owner': owner_value,
+                'Top Level Owner ID': owner_id_value,
                 'Legal Entity': legal_entity_value,
                 'Advisor': advisor_value,
                 'Instrument': instrument,
@@ -577,8 +585,12 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
     # Ensure Advisor column exists - create it as empty if it doesn't exist
     if 'Advisor' not in merged_data.columns:
         merged_data['Advisor'] = ''
+    
+    # Ensure Top Level Owner ID column exists - create it as empty if it doesn't exist
+    if 'Top Level Owner ID' not in merged_data.columns:
+        merged_data['Top Level Owner ID'] = ''
 
-    base_cols = ["Top Level Owner", "Legal Entity", "Advisor", "Account", "Instrument",  "Has all transactions", "Instruction Date", "Last Trade Date", "Subscription Approval Date", "Original Commitment",
+    base_cols = ["Top Level Owner", "Top Level Owner ID", "Legal Entity", "Advisor", "Account", "Instrument",  "Has all transactions", "Instruction Date", "Last Trade Date", "Subscription Approval Date", "Original Commitment",
                  'Total Contributions',
                  'Unfunded Capital',
                  'Capital Returned', 'Mkt Value (USD)', "Last Buy/Contribution", "Last Sell/Distribution", "is_open"]
@@ -727,8 +739,8 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
 
     # Ensure column naming is Top Level Owner in both sheets and reorder Open
 
-    # Reorder columns in Open sheet: place Open Reason after Top Level Owner, Legal Entity, Advisor, Account, Instrument
-    prefix = [col for col in ['Top Level Owner', 'Legal Entity', 'Advisor', 'Account',
+    # Reorder columns in Open sheet: place Open Reason after Top Level Owner, Top Level Owner ID, Legal Entity, Advisor, Account, Instrument
+    prefix = [col for col in ['Top Level Owner', 'Top Level Owner ID', 'Legal Entity', 'Advisor', 'Account',
                               'Instrument', 'Open Reason'] if col in open_df.columns]
     others = [c for c in open_df.columns if c not in prefix]
     open_df = open_df[prefix + others]
