@@ -4,7 +4,7 @@ import os
 import sys
 # Add the code directory to the Python path to ensure imports work
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from addepar_utils import fetch_addepar_data, set_up_environment
+from addepar_utils import fetch_addepar_data, set_up_environment, get_portfolio_data_using_jobs
 import warnings
 import glob
 from datetime import datetime
@@ -177,7 +177,7 @@ def fetch_and_process_alts_list_data(api_key, api_secret, firm_id, base_url, sta
     fetch_start_date = (today_dt - pd.Timedelta(days=7)).strftime('%Y-%m-%d')
 
     # Only fetch if fetch_start_date <= end_date
-    alts_list_df, success, message = fetch_addepar_data(
+    success, message, alts_list_df = get_portfolio_data_using_jobs(
         "portfolio", "734752", api_key, api_secret, firm_id, base_url, fetch_start_date, end_date
     )
     
@@ -193,6 +193,10 @@ def fetch_and_process_alts_list_data(api_key, api_secret, firm_id, base_url, sta
     # rename Direct Owner ID to Direct Owner Entity ID
     alts_list_df = alts_list_df.rename(columns={"Direct Owner ID": "Direct Owner Entity ID", "Capital Returned (Since Inception, USD)": "Capital Returned",
                                                 "Total Commitments (Since Inception, USD)": "Total Commitments", "Total Contributions (Since Inception, USD)": "Total Contributions"})
+    
+    # Convert ID columns to numeric for consistent joins
+    alts_list_df = coerce_id_columns_to_int64(alts_list_df)
+    
     print(f"  [OK] Alts list processing complete\n")
     return alts_list_df
 
