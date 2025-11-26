@@ -305,10 +305,18 @@ def process_alts_info_data():
     # Create open/close summary: for each (Account, Instrument), is there any Fully Funded? == False?
     funded_col = 'Fully Funded?'
     if funded_col in investment_status_df.columns:
+        # Debug: check what values are in the column
+        print(f"  [DEBUG] 'Fully Funded?' column dtype: {investment_status_df[funded_col].dtype}")
+        print(f"  [DEBUG] Unique values in 'Fully Funded?': {investment_status_df[funded_col].unique()}")
+        print(f"  [DEBUG] Value counts: {investment_status_df[funded_col].value_counts()}")
+        
         complete_summary = investment_status_df.groupby(["Direct Owner Entity ID", "Entity ID"], dropna=False)[
             funded_col].apply(lambda x: (x.astype(str).str.lower() == 'false').any()).reset_index()
         complete_summary = complete_summary.rename(
             columns={funded_col: 'is_open'})
+        
+        # Debug: check how many open vs closed
+        print(f"  [DEBUG] is_open value counts: {complete_summary['is_open'].value_counts()}")
     else:
         # If neither column exists, default to closed
         complete_summary = investment_status_df.groupby(

@@ -19,7 +19,19 @@ def create_auth_header(api_key: str, api_secret: str) -> str:
     return f"Basic {encoded}"
 
 def set_up_environment():
-    load_dotenv()
+    # Try to load .env file from script directory (works better on VPN)
+    import pathlib
+    script_dir = pathlib.Path(__file__).parent.parent
+    env_path = script_dir / '.env'
+    
+    print(f"  [INFO] Looking for .env file at: {env_path}")
+    
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path)
+        print(f"  [OK] Loaded .env file")
+    else:
+        load_dotenv()  # Try default behavior
+        print(f"  [WARNING] .env file not found at {env_path}, trying default location")
         
     start_date = "01/01/2022"
     end_date = pd.Timestamp.now().strftime('%Y-%m-%d')
@@ -29,8 +41,22 @@ def set_up_environment():
     firm_id = os.getenv('ADDEPAR_FIRM_ID')
     api_key = os.getenv('ADDEPAR_API_KEY')
     api_secret = os.getenv('ADDEPAR_API_SECRET')
+    
+    # Validate that required environment variables are set
+    if not firm_domain or not firm_id or not api_key or not api_secret:
+        missing = []
+        if not firm_domain: missing.append('ADDEPAR_FIRM_DOMAIN')
+        if not firm_id: missing.append('ADDEPAR_FIRM_ID')
+        if not api_key: missing.append('ADDEPAR_API_KEY')
+        if not api_secret: missing.append('ADDEPAR_API_SECRET')
+        
+        raise ValueError(
+            f"Missing required environment variables: {', '.join(missing)}\n"
+            f"Please check your .env file at: {env_path}"
+        )
         
     base_url = f"https://{firm_domain}"
+    print(f"  [OK] API configured for: {base_url}")
     
     return api_key, api_secret, firm_id, base_url, start_date, end_date
     
