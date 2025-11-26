@@ -22,6 +22,14 @@ except AttributeError:
 TRANSACTIONS_CACHE_FILE = 'transactions_cache.xlsx'
 
 
+def is_false_value(x):
+    """Check if value represents False - handles 0, '0', 'false', False, 0.0"""
+    if pd.isna(x):
+        return False
+    str_val = str(x).strip().lower()
+    return str_val in ['false', '0', '0.0', 'no', 'n']
+
+
 def coerce_id_columns_to_int64(df):
     """Ensure ID columns are numeric for consistent joins."""
     for col in ['Direct Owner Entity ID', 'Entity ID']:
@@ -305,18 +313,10 @@ def process_alts_info_data():
     # Create open/close summary: for each (Account, Instrument), is there any Fully Funded? == False?
     funded_col = 'Fully Funded?'
     if funded_col in investment_status_df.columns:
-        # Debug: check what values are in the column
-        print(f"  [DEBUG] 'Fully Funded?' column dtype: {investment_status_df[funded_col].dtype}")
-        print(f"  [DEBUG] Unique values in 'Fully Funded?': {investment_status_df[funded_col].unique()}")
-        print(f"  [DEBUG] Value counts: {investment_status_df[funded_col].value_counts()}")
-        
         complete_summary = investment_status_df.groupby(["Direct Owner Entity ID", "Entity ID"], dropna=False)[
-            funded_col].apply(lambda x: (x.astype(str).str.lower() == 'false').any()).reset_index()
+            funded_col].apply(lambda x: x.apply(is_false_value).any()).reset_index()
         complete_summary = complete_summary.rename(
             columns={funded_col: 'is_open'})
-        
-        # Debug: check how many open vs closed
-        print(f"  [DEBUG] is_open value counts: {complete_summary['is_open'].value_counts()}")
     else:
         # If neither column exists, default to closed
         complete_summary = investment_status_df.groupby(
@@ -609,7 +609,7 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
     output_cols = base_cols.copy()
     if 'Fully Funded?' in merged_data.columns:
         output_cols.insert(-1, 'Fully Funded?')
-    final_df = merged_data[output_cols]
+    final_df = merged_data[output_cols].copy()  # Use .copy() to avoid SettingWithCopyWarning
 
     # Prepare Open Reason column (populated below for Open rows only)
     final_df['Open Reason'] = ''
@@ -708,23 +708,23 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
             # - if "Initial Funding Received" and not "Fully Funded?": unfunded capital
 
             reason_set = False
-            not_initial_received = matching_rows['Initial Trade Executed'].astype(
-                str).str.strip().str.lower() == 'false'
-            if not matching_rows[not_initial_received].empty:
+            # Check if Initial Trade Executed is False (0 or 'false')
+            not_initial_received = matching_rows['Initial Trade Executed'].apply(is_false_value)
+            if not_initial_received.any():
                 final_df.loc[idx, 'Open Reason'] = 'In Buy Process'
             # Check unfunded if not already set
             else:
                 addepar_received_col = 'Received in Addepar'
-                not_addepar_received = matching_rows[addepar_received_col].astype(
-                    str).str.strip().str.lower() == 'false'
-                if not matching_rows[not_addepar_received].empty:
+                # Check if Received in Addepar is False (0 or 'false')
+                not_addepar_received = matching_rows[addepar_received_col].apply(is_false_value)
+                if not_addepar_received.any():
                     final_df.loc[idx,
                                  'Open Reason'] = 'Not Received in Addepar'
                 else:
                     funded_col = 'Fully Funded?'
-                    not_fully_funded = matching_rows[funded_col].astype(
-                        str).str.strip().str.lower() == 'false'
-                    if not matching_rows[not_fully_funded].empty:
+                    # Check if Fully Funded is False (0 or 'false')
+                    not_fully_funded = matching_rows[funded_col].apply(is_false_value)
+                    if not_fully_funded.any():
                         final_df.loc[idx, 'Open Reason'] = 'Unfunded Capital'
 
     # Split into open and close sheets based on is_open
