@@ -685,9 +685,18 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
     # Convert Unfunded Capital to numeric for comparison
 
     print("[STEP 6/7] Calculating open reasons for positions...")
+    # Track statistics for debugging
+    open_count = 0
+    no_match_count = 0
+    in_buy_process_count = 0
+    not_received_count = 0
+    unfunded_count = 0
+    no_reason_count = 0
+    
     # Check for incomplete transactions in investment_status_df first (higher priority than Unfunded Capital)
     for idx, row in final_df.iterrows():
         if row['is_open'] != False:
+            open_count += 1
             # Find matching rows in investment_status_df
             if row['Account'] and row['Instrument']:
                 # For positions with Account and Instrument, compare using Instrument_Match for consistency
@@ -703,29 +712,55 @@ def format_and_save_excel(merged_data, investment_status_df, output_filename):
                     (investment_status_df['Instrument_Match'].astype(
                         str).str.strip().str.lower() == str(row['Instrument']).strip().lower())
                 ]
+            
+            # Skip if no matching rows found
+            if matching_rows.empty:
+                no_match_count += 1
+                continue
+                
             # Determine Open Reason per new rules
-            # - if not "Initial Funding Received": in buy process
-            # - if "Initial Funding Received" and not "Fully Funded?": unfunded capital
+            # - if not "Initial Trade Executed": in buy process
+            # - if not "Received in Addepar": not received in addepar
+            # - if not "Fully Funded?": unfunded capital
 
-            reason_set = False
+            reason_assigned = False
+            
             # Check if Initial Trade Executed is False (0 or 'false')
-            not_initial_received = matching_rows['Initial Trade Executed'].apply(is_false_value)
-            if not_initial_received.any():
-                final_df.loc[idx, 'Open Reason'] = 'In Buy Process'
-            # Check unfunded if not already set
-            else:
-                addepar_received_col = 'Received in Addepar'
-                # Check if Received in Addepar is False (0 or 'false')
-                not_addepar_received = matching_rows[addepar_received_col].apply(is_false_value)
+            if 'Initial Trade Executed' in matching_rows.columns:
+                not_initial_received = matching_rows['Initial Trade Executed'].apply(is_false_value)
+                if not_initial_received.any():
+                    final_df.loc[idx, 'Open Reason'] = 'In Buy Process'
+                    in_buy_process_count += 1
+                    reason_assigned = True
+                    continue
+            
+            # Check if Received in Addepar is False (0 or 'false')
+            if 'Received in Addepar' in matching_rows.columns:
+                not_addepar_received = matching_rows['Received in Addepar'].apply(is_false_value)
                 if not_addepar_received.any():
-                    final_df.loc[idx,
-                                 'Open Reason'] = 'Not Received in Addepar'
-                else:
-                    funded_col = 'Fully Funded?'
-                    # Check if Fully Funded is False (0 or 'false')
-                    not_fully_funded = matching_rows[funded_col].apply(is_false_value)
-                    if not_fully_funded.any():
-                        final_df.loc[idx, 'Open Reason'] = 'Unfunded Capital'
+                    final_df.loc[idx, 'Open Reason'] = 'Not Received in Addepar'
+                    not_received_count += 1
+                    reason_assigned = True
+                    continue
+            
+            # Check if Fully Funded is False (0 or 'false')
+            if 'Fully Funded?' in matching_rows.columns:
+                not_fully_funded = matching_rows['Fully Funded?'].apply(is_false_value)
+                if not_fully_funded.any():
+                    final_df.loc[idx, 'Open Reason'] = 'Unfunded Capital'
+                    unfunded_count += 1
+                    reason_assigned = True
+            
+            if not reason_assigned:
+                no_reason_count += 1
+    
+    # Print summary
+    print(f"  [INFO] Open positions: {open_count}")
+    print(f"  [INFO] - No matching rows: {no_match_count}")
+    print(f"  [INFO] - In Buy Process: {in_buy_process_count}")
+    print(f"  [INFO] - Not Received in Addepar: {not_received_count}")
+    print(f"  [INFO] - Unfunded Capital: {unfunded_count}")
+    print(f"  [INFO] - No reason assigned: {no_reason_count}")
 
     # Split into open and close sheets based on is_open
     print("[STEP 6/7] Splitting into Open and Closed sheets...")
